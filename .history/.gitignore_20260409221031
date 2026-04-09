@@ -1,0 +1,6 @@
+backed/.venv/
+backed/__pycache__/
+backed/*.py[cod]
+backed/.env
+backed/*.log
+backed/.pytest_cache/
