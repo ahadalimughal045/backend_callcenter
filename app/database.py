@@ -142,6 +142,7 @@ CREATE INDEX IF NOT EXISTS idx_carriers_email ON carriers(email);
 CREATE INDEX IF NOT EXISTS idx_carriers_safety_rating ON carriers(safety_rating);
 
 -- Trigram indexes for fast ILIKE text search on carriers
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE INDEX IF NOT EXISTS idx_carriers_legal_name_trgm ON carriers USING gin (legal_name gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_carriers_mc_number_trgm ON carriers USING gin (mc_number gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_carriers_dot_number_trgm ON carriers USING gin (dot_number gin_trgm_ops);
@@ -414,7 +415,11 @@ async def connect_db() -> None:
     _pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)
     try:
         async with _pool.acquire() as conn:
-            await conn.execute(_SCHEMA_SQL)
+            # We separate the execution of standard columns and the rest to prevent failures cascading
+            try:
+                await conn.execute(_SCHEMA_SQL)
+            except Exception as se:
+                print(f"[DB] Partial schema init error: {se}")
             # Ensure optimized columns exist for existing databases
             await conn.execute("""
                 ALTER TABLE carriers ADD COLUMN IF NOT EXISTS physical_state TEXT;
@@ -427,7 +432,8 @@ async def connect_db() -> None:
             """)
         print("[DB] Connected to PostgreSQL, schema initialized, pool created")
     except Exception as e:
-        print(f"[DB] Connected to PostgreSQL, pool created (schema init skipped: {e})")
+        print(f"[DB] Connected to PostgreSQL, pool created (schema init failed entirely: {e})")
+
 
 
 async def close_db() -> None:
