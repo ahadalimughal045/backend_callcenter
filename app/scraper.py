@@ -297,6 +297,7 @@ async def fetch_inspection_and_crash_data(dot: str) -> dict:
                             "plateState": clean_text(cols[4].get_text()),
                             "fatal": clean_text(cols[5].get_text()),
                             "injuries": clean_text(cols[6].get_text()),
+                            "towaway": clean_text(cols[7].get_text()) if len(cols) >= 8 else "No",
                         })
     except Exception as e:
         print(f"Error parsing inspection/crash data: {e}")

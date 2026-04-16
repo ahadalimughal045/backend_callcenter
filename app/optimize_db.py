@@ -25,6 +25,9 @@ async def optimize():
                 ALTER TABLE carriers ADD COLUMN IF NOT EXISTS crash_count INTEGER DEFAULT 0;
                 ALTER TABLE carriers ADD COLUMN IF NOT EXISTS inspection_count INTEGER DEFAULT 0;
                 ALTER TABLE carriers ADD COLUMN IF NOT EXISTS oos_violation_total INTEGER DEFAULT 0;
+                ALTER TABLE carriers ADD COLUMN IF NOT EXISTS injuries_total INTEGER DEFAULT 0;
+                ALTER TABLE carriers ADD COLUMN IF NOT EXISTS fatalities_total INTEGER DEFAULT 0;
+                ALTER TABLE carriers ADD COLUMN IF NOT EXISTS towaway_total INTEGER DEFAULT 0;
                 ALTER TABLE carriers ADD COLUMN IF NOT EXISTS years_in_business FLOAT DEFAULT 0;
             """)
 
@@ -89,6 +92,20 @@ async def optimize():
                             SELECT COALESCE(SUM((elem->>'oosViolations')::int), 0)
                             FROM jsonb_array_elements(COALESCE(inspections, '[]'::jsonb)) elem
                         ),
+                        injuries_total = (
+                            SELECT COALESCE(SUM(CASE WHEN elem->>'injuries' ~ '^[0-9]+$' THEN (elem->>'injuries')::int ELSE 0 END), 0)
+                            FROM jsonb_array_elements(COALESCE(crashes, '[]'::jsonb)) elem
+                        ),
+                        fatalities_total = (
+                            SELECT COALESCE(COUNT(*), 0)
+                            FROM jsonb_array_elements(COALESCE(crashes, '[]'::jsonb)) elem
+                            WHERE elem->>'fatal' IS NOT NULL AND elem->>'fatal' NOT IN ('No', '0', '', 'N/A')
+                        ),
+                        towaway_total = (
+                            SELECT COALESCE(COUNT(*), 0)
+                            FROM jsonb_array_elements(COALESCE(crashes, '[]'::jsonb)) elem
+                            WHERE elem->>'towaway' IS NOT NULL AND elem->>'towaway' NOT IN ('No', '0', '', 'N/A')
+                        ),
                         years_in_business = CASE 
                             WHEN mcs150_date ~ '[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}' 
                             THEN EXTRACT(YEAR FROM age(CURRENT_DATE, TO_DATE(mcs150_date, 'MM/DD/YYYY')))
@@ -119,6 +136,9 @@ async def optimize():
                 CREATE INDEX IF NOT EXISTS idx_carriers_crash_count ON carriers(crash_count);
                 CREATE INDEX IF NOT EXISTS idx_carriers_inspection_count ON carriers(inspection_count);
                 CREATE INDEX IF NOT EXISTS idx_carriers_oos_violation_total ON carriers(oos_violation_total);
+                CREATE INDEX IF NOT EXISTS idx_carriers_injuries_total ON carriers(injuries_total);
+                CREATE INDEX IF NOT EXISTS idx_carriers_fatalities_total ON carriers(fatalities_total);
+                CREATE INDEX IF NOT EXISTS idx_carriers_towaway_total ON carriers(towaway_total);
                 CREATE INDEX IF NOT EXISTS idx_carriers_years_in_business ON carriers(years_in_business);
                 CREATE INDEX IF NOT EXISTS idx_carriers_dba_name_trgm ON carriers USING gin (dba_name gin_trgm_ops);
                 CREATE INDEX IF NOT EXISTS idx_carriers_operation_class_gin ON carriers USING gin (operation_classification);

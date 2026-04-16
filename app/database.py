@@ -73,6 +73,9 @@ CREATE TABLE IF NOT EXISTS carriers (
     crash_count INTEGER DEFAULT 0,
     inspection_count INTEGER DEFAULT 0,
     oos_violation_total INTEGER DEFAULT 0,
+    injuries_total INTEGER DEFAULT 0,
+    fatalities_total INTEGER DEFAULT 0,
+    towaway_total INTEGER DEFAULT 0,
     years_in_business FLOAT DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -181,6 +184,20 @@ BEGIN
     NEW.oos_violation_total = (
         SELECT COALESCE(SUM((elem->>'oosViolations')::int), 0)
         FROM jsonb_array_elements(COALESCE(NEW.inspections, '[]'::jsonb)) elem
+    );
+    NEW.injuries_total = (
+        SELECT COALESCE(SUM(CASE WHEN elem->>'injuries' ~ '^[0-9]+$' THEN (elem->>'injuries')::int ELSE 0 END), 0)
+        FROM jsonb_array_elements(COALESCE(NEW.crashes, '[]'::jsonb)) elem
+    );
+    NEW.fatalities_total = (
+        SELECT COALESCE(COUNT(*), 0)
+        FROM jsonb_array_elements(COALESCE(NEW.crashes, '[]'::jsonb)) elem
+        WHERE elem->>'fatal' IS NOT NULL AND elem->>'fatal' NOT IN ('No', '0', '', 'N/A')
+    );
+    NEW.towaway_total = (
+        SELECT COALESCE(COUNT(*), 0)
+        FROM jsonb_array_elements(COALESCE(NEW.crashes, '[]'::jsonb)) elem
+        WHERE elem->>'towaway' IS NOT NULL AND elem->>'towaway' NOT IN ('No', '0', '', 'N/A')
     );
     IF NEW.mcs150_date ~ '[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}' THEN
         NEW.years_in_business = EXTRACT(YEAR FROM age(CURRENT_DATE, TO_DATE(NEW.mcs150_date, 'MM/DD/YYYY')));
@@ -428,6 +445,9 @@ async def connect_db() -> None:
                 ALTER TABLE carriers ADD COLUMN IF NOT EXISTS crash_count INTEGER DEFAULT 0;
                 ALTER TABLE carriers ADD COLUMN IF NOT EXISTS inspection_count INTEGER DEFAULT 0;
                 ALTER TABLE carriers ADD COLUMN IF NOT EXISTS oos_violation_total INTEGER DEFAULT 0;
+                ALTER TABLE carriers ADD COLUMN IF NOT EXISTS injuries_total INTEGER DEFAULT 0;
+                ALTER TABLE carriers ADD COLUMN IF NOT EXISTS fatalities_total INTEGER DEFAULT 0;
+                ALTER TABLE carriers ADD COLUMN IF NOT EXISTS towaway_total INTEGER DEFAULT 0;
                 ALTER TABLE carriers ADD COLUMN IF NOT EXISTS years_in_business FLOAT DEFAULT 0;
             """)
         print("[DB] Connected to PostgreSQL, schema initialized, pool created")
@@ -711,6 +731,12 @@ def _carrier_row_to_dict(row) -> dict:
         "insurance_policies": "insurancePolicies",
         "inspections": "inspections",
         "crashes": "crashes",
+        "crash_count": "crashCount",
+        "inspection_count": "inspectionCount",
+        "oos_violation_total": "oosViolationTotal",
+        "injuries_total": "injuriesTotal",
+        "fatalities_total": "fatalitiesTotal",
+        "towaway_total": "towawayTotal",
         "created_at": "createdAt",
         "updated_at": "updatedAt",
     }
@@ -1029,36 +1055,20 @@ async def fetch_carriers(filters: dict) -> dict:
         idx += 1
 
     if filters.get("injuries_min"):
-        conditions.append(
-            f"(SELECT COALESCE(SUM(CASE WHEN elem->>'injuries' ~ '^[0-9]+$' "
-            f"THEN (elem->>'injuries')::int ELSE 0 END), 0) "
-            f"FROM jsonb_array_elements(COALESCE(c.crashes, '[]'::jsonb)) elem) >= ${idx}"
-        )
+        conditions.append(f"c.injuries_total >= ${idx}")
         params.append(int(filters["injuries_min"]))
         idx += 1
     if filters.get("injuries_max"):
-        conditions.append(
-            f"(SELECT COALESCE(SUM(CASE WHEN elem->>'injuries' ~ '^[0-9]+$' "
-            f"THEN (elem->>'injuries')::int ELSE 0 END), 0) "
-            f"FROM jsonb_array_elements(COALESCE(c.crashes, '[]'::jsonb)) elem) <= ${idx}"
-        )
+        conditions.append(f"c.injuries_total <= ${idx}")
         params.append(int(filters["injuries_max"]))
         idx += 1
 
     if filters.get("fatalities_min"):
-        conditions.append(
-            f"(SELECT COALESCE(COUNT(*), 0) "
-            f"FROM jsonb_array_elements(COALESCE(c.crashes, '[]'::jsonb)) elem "
-            f"WHERE elem->>'fatal' IS NOT NULL AND elem->>'fatal' NOT IN ('No', '0', '', 'N/A')) >= ${idx}"
-        )
+        conditions.append(f"c.fatalities_total >= ${idx}")
         params.append(int(filters["fatalities_min"]))
         idx += 1
     if filters.get("fatalities_max"):
-        conditions.append(
-            f"(SELECT COALESCE(COUNT(*), 0) "
-            f"FROM jsonb_array_elements(COALESCE(c.crashes, '[]'::jsonb)) elem "
-            f"WHERE elem->>'fatal' IS NOT NULL AND elem->>'fatal' NOT IN ('No', '0', '', 'N/A')) <= ${idx}"
-        )
+        conditions.append(f"c.fatalities_total <= ${idx}")
         params.append(int(filters["fatalities_max"]))
         idx += 1
 
@@ -1072,19 +1082,11 @@ async def fetch_carriers(filters: dict) -> dict:
         idx += 1
 
     if filters.get("toway_min"):
-        conditions.append(
-            f"(SELECT COALESCE(COUNT(*), 0) "
-            f"FROM jsonb_array_elements(COALESCE(c.crashes, '[]'::jsonb)) elem "
-            f"WHERE elem->>'towaway' IS NOT NULL AND elem->>'towaway' NOT IN ('No', '0', '', 'N/A')) >= ${idx}"
-        )
+        conditions.append(f"c.towaway_total >= ${idx}")
         params.append(int(filters["toway_min"]))
         idx += 1
     if filters.get("toway_max"):
-        conditions.append(
-            f"(SELECT COALESCE(COUNT(*), 0) "
-            f"FROM jsonb_array_elements(COALESCE(c.crashes, '[]'::jsonb)) elem "
-            f"WHERE elem->>'towaway' IS NOT NULL AND elem->>'towaway' NOT IN ('No', '0', '', 'N/A')) <= ${idx}"
-        )
+        conditions.append(f"c.towaway_total <= ${idx}")
         params.append(int(filters["toway_max"]))
         idx += 1
 
@@ -1241,6 +1243,7 @@ async def fetch_carriers(filters: dict) -> dict:
         c.mcs150_date, c.mcs150_mileage, c.safety_rating, c.safety_rating_date,
         c.operation_classification, c.carrier_operation, c.cargo_carried,
         c.crash_count, c.inspection_count, c.oos_violation_total,
+        c.injuries_total, c.fatalities_total, c.towaway_total,
         c.years_in_business, c.out_of_service_date, c.state_carrier_id,
         c.non_cmv_units, c.mailing_address, c.date_scraped, c.duns_number,
         c.basic_scores, c.oos_rates,
