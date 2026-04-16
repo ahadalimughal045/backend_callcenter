@@ -4,8 +4,7 @@ import asyncio
 import asyncpg
 from typing import Optional
 from dotenv import load_dotenv
-
-# Load environment variables
+ # Load environment variables
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
